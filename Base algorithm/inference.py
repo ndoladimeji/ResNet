@@ -137,13 +137,13 @@ for images, image_ids in inference_loader:
         multi_label_predictions.extend(multi_label_pred.cpu().numpy().tolist())
 
 # Save binary classification probabilities to a JSON file
-with open('output/likelihoods.json', 'w') as file:
+with open('test/output/likelihoods.json', 'w') as file:
     json.dump(binary_probabilities, file)
 
 # Round binary predictions and save to JSON file
-with open('output/predictions.json', 'w') as file:
+with open('test/output/binary_decisions.json', 'w') as file:
     json.dump(binary_predictions, file)
 
 # Save multi-label predictions to JSON file
-with open('output/multi_label_predictions.json', 'w') as file:
+with open('test/output/multi_label_predictions.json', 'w') as file:
     json.dump(multi_label_predictions, file)
