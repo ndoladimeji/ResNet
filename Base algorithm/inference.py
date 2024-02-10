@@ -1,54 +1,149 @@
-import random
-
-import numpy
+import os
+import json
+import torch
 from PIL import Image
-from helper import DEFAULT_GLAUCOMATOUS_FEATURES, inference_tasks
+from torchvision import transforms
+from torch.utils.data import Dataset, DataLoader
+from torchvision.models import resnet34
+import torch.nn as nn
+import pandas as pd
+import numpy as np
+from skimage import io
 
+import warnings
+warnings.filterwarnings("ignore")
 
-def run():
-    _show_torch_cuda_info()
+# Define the device (GPU or CPU)
+device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-    for jpg_image_file_name, save_prediction in inference_tasks():
-        # Do inference, possibly something better performant
-        ...
+# Load the trained binary classifier model
+class ResNet34NetworkBinary(nn.Module):
+    def __init__(self):
+        super(ResNet34NetworkBinary, self).__init__()
+        self.features = resnet34(pretrained=True)
+        for param in self.features.parameters():
+            param.requires_grad = False
+        self.classification = nn.Linear(1000, 1)
 
-        print(f"Running inference on {jpg_image_file_name}")
+    def forward(self, image):
+        image = self.features(image)
+        out = self.classification(image)
+        return torch.sigmoid(out)
 
-        # For example: use Pillow to read the jpg file and convert it to a NumPY array:
-        image = Image.open(jpg_image_file_name)
-        numpy_array = numpy.array(image)
+binary_model = ResNet34NetworkBinary()
+binary_model.load_state_dict(torch.load('model.pt'))
+binary_model = binary_model.to(device)
+binary_model.eval()
 
-        is_referable_glaucoma_likelihood = random.random()
-        is_referable_glaucoma = is_referable_glaucoma_likelihood > 0.5
-        if is_referable_glaucoma:
-            features = {
-                k: random.choice([True, False])
-                for k, v in DEFAULT_GLAUCOMATOUS_FEATURES.items()
-            }
+# Load the trained multi-label classifier model
+class ResNet34NetworkMultiLabel(nn.Module):
+    def __init__(self):
+        super(ResNet34NetworkMultiLabel, self).__init__()
+        self.features = resnet34(pretrained=True)
+        for param in self.features.parameters():
+            param.requires_grad = False
+        self.classification = nn.Linear(1000, 10)
+
+    def forward(self, image):
+        image = self.features(image)
+        out = self.classification(image)
+        return torch.round(torch.sigmoid(out))
+
+multi_label_model = ResNet34NetworkMultiLabel()
+multi_label_model.load_state_dict(torch.load('modeljust.pt'))
+multi_label_model = multi_label_model.to(device)
+multi_label_model.eval()
+
+# Dataset class for inference
+class JustraigsInference(Dataset):
+    def __init__(self, dataframe, transform):
+        self.dataframe = dataframe
+        self.transform = transform
+
+    def __len__(self):
+        return len(self.dataframe)
+
+    def __getitem__(self, index):
+        img_name = self.dataframe['Eye ID'][index]
+        image_path = f'input/{img_name}'  # Assume image name without extension
+
+        # Check if the image is a stacked TIFF
+        if os.path.exists(f'{image_path}.tiff'):
+            image = io.imread(f'{image_path}.tiff')
+            if len(image.shape) > 2:  # Check if image is stacked
+                # Destack the image
+                image_list = [self.transform(slice) for slice in image]
+                return image_list, img_name
+            else:
+                image = self.transform(image)
+                return image, img_name
+        # Check if the image is a single .mha image
+        elif os.path.exists(f'{image_path}.mha'):
+            # Load .mha image using appropriate library (e.g., SimpleITK)
+            # Assuming you have SimpleITK installed, you can replace the following line with the appropriate code to load .mha image
+            import SimpleITK as sitk
+            image = sitk.ReadImage(f'{image_path}.mha')
+            # Convert .mha image to numpy array
+            image = sitk.GetArrayFromImage(image)
+            image = self.transform(image)
+            return image, img_name
         else:
-            features = None
-        ...
+            raise FileNotFoundError(f"Image file not found for {img_name}")
 
-        # Finally, save the answer
-        save_prediction(
-            is_referable_glaucoma,
-            is_referable_glaucoma_likelihood,
-            features,
-        )
-    return 0
+# Transformation for image preprocessing
+transform = transforms.Compose([
+    transforms.ToPILImage(),
+    transforms.Resize((224, 224)),
+    transforms.ToTensor(),
+    transforms.Normalize((0.485, 0.456, 0.406), (0.229, 0.224, 0.225))
+])
 
+# Load the data for inference
+df = pd.read_csv('Jtrain_folds.csv')
+all_dataset = JustraigsInference(df, transform)
+all_data_loader = DataLoader(all_dataset, batch_size=1, shuffle=False)
 
-def _show_torch_cuda_info():
-    import torch
+referable_glaucoma_df = pd.read_csv('referable_glaucoma.csv')
+inference_dataset = JustraigsInference(referable_glaucoma_df, transform)
+inference_loader = DataLoader(inference_dataset, batch_size=1, shuffle=False)
 
-    print("=+=" * 10)
-    print(f"Torch CUDA is available: {(available := torch.cuda.is_available())}")
-    if available:
-        print(f"\tnumber of devices: {torch.cuda.device_count()}")
-        print(f"\tcurrent device: { (current_device := torch.cuda.current_device())}")
-        print(f"\tproperties: {torch.cuda.get_device_properties(current_device)}")
-    print("=+=" * 10)
+# Store predictions along with image IDs
+binary_probabilities = []
+binary_predictions = []
+multi_label_predictions = []
 
+# Iterate over the images and make predictions for binary classification
+for images, image_ids in all_data_loader:
+    images = images.to(device)
+    
+    # Binary classification inference
+    with torch.no_grad():
+        out = binary_model(images)
+        pred = torch.sigmoid(out)
 
-if __name__ == "__main__":
-    raise SystemExit(run())
+        # Convert rounded predictions to True and False
+        rounded_predictions = (torch.round(pred) == 1).bool()
+
+        # Append to lists
+        binary_probabilities.extend(pred.cpu().numpy().tolist())
+        binary_predictions.extend(rounded_predictions.cpu().numpy().tolist())
+
+# Multi-label classification inference
+for images, image_ids in inference_loader:
+    images = images.to(device)
+    
+    with torch.no_grad():
+        multi_label_pred = multi_label_model(images)
+        multi_label_predictions.extend(multi_label_pred.cpu().numpy().tolist())
+
+# Save binary classification probabilities to a JSON file
+with open('output/likelihoods.json', 'w') as file:
+    json.dump(binary_probabilities, file)
+
+# Round binary predictions and save to JSON file
+with open('output/predictions.json', 'w') as file:
+    json.dump(binary_predictions, file)
+
+# Save multi-label predictions to JSON file
+with open('output/multi_label_predictions.json', 'w') as file:
+    json.dump(multi_label_predictions, file)
