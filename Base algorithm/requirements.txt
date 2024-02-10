@@ -2,3 +2,8 @@ pillow
 SimpleITK
 imagecodecs
 numpy
+torch
+PIL
+pandas
+numpy
+skimage
