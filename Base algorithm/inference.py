@@ -65,7 +65,7 @@ class JustraigsInference(Dataset):
 
     def __getitem__(self, index):
         img_name = self.dataframe['Eye ID'][index]
-        image_path = f'input/{img_name}.JPG'
+        image_path = f'/input/stacked-color-fundus-images/images/{img_name}'
 
         # Check if the image is a stacked TIFF
         if os.path.exists(f'{image_path}.tiff'):
@@ -88,7 +88,7 @@ class JustraigsInference(Dataset):
             image = self.transform(image)
             return image, img_name
         else:
-            raise FileNotFoundError(f"Image file not found for {img_name}")
+            raise FileNotFoundError(f"Image file not found for {img_name}.JPG")
 
 # Transformation for image preprocessing
 transform = transforms.Compose([
@@ -137,13 +137,13 @@ for images, image_ids in inference_loader:
         multi_label_predictions.extend(multi_label_pred.cpu().numpy().tolist())
 
 # Save binary classification probabilities to a JSON file
-with open('output/likelihoods.json', 'w') as file:
+with open('/output/multiple-referable-glaucoma-likelihoods.json', 'w') as file:
     json.dump(binary_probabilities, file)
 
 # Round binary predictions and save to JSON file
-with open('output/binary_decisions.json', 'w') as file:
+with open('/output/multiple-referable-glaucoma-binary.json', 'w') as file:
     json.dump(binary_predictions, file)
 
 # Save multi-label predictions to JSON file
-with open('output/multi_label_predictions.json', 'w') as file:
+with open('/output/stacked-referable-glaucomatous-features.json', 'w') as file:
     json.dump(multi_label_predictions, file)
